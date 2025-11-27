@@ -1,26 +1,25 @@
 """
-LlamaIndex-based RAG System
-Modern, efficient RAG implementation using LlamaIndex
+Complete RAG System - Integration of all components
+Combines indexer, retriever, QA system, evaluator, and chatbot.
 """
 
 import os
 import yaml
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from llama_index.core import SimpleDirectoryReader, VectorStoreIndex, StorageContext, Document
-from llama_index.core.node_parser import SentenceSplitter
-from llama_index.core.schema import MetadataMode
-from llama_index.core.prompts import PromptTemplate
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from llama_index.llms.groq import Groq
-from llama_index.vector_stores.chroma import ChromaVectorStore
-import chromadb
+
+# Import all RAG components
+from src.indexer import DocumentIndexer
+from src.retriever import DocumentRetriever
+from src.qa_system import QASystem
+from src.Evaluator import RAGEvaluator
+from src.Chatbot import RAGChatbot
 
 
 class RAGSystem:
     """
-    Complete RAG system using LlamaIndex with ChromaDB vector store.
-    Handles document loading, indexing, and querying.
+    Complete RAG system integrating all components.
+    Provides a unified interface for document indexing, retrieval, QA, evaluation, and chatbot.
     """
     
     def __init__(self, 
@@ -32,7 +31,7 @@ class RAGSystem:
                  groq_api_key: Optional[str] = None,
                  groq_model: str = "llama-3.3-70b-versatile"):
         """
-        Initialize the RAG system.
+        Initialize the complete RAG system.
         
         Args:
             data_dir: Directory containing documents
@@ -43,209 +42,92 @@ class RAGSystem:
             groq_api_key: Groq API key for LLM
             groq_model: Groq model name
         """
-        self.data_dir = Path(data_dir)
-        self.vectorstore_dir = Path(vectorstore_dir)
-        self.embedding_model_name = embedding_model
+        self.data_dir = data_dir
+        self.vectorstore_dir = vectorstore_dir
+        self.embedding_model = embedding_model
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self.groq_api_key = groq_api_key
+        self.groq_model = groq_model
         
-        # Initialize embedding model
-        print(f"🔧 Loading embedding model: {embedding_model}")
-        self.embed_model = HuggingFaceEmbedding(model_name=embedding_model)
-        print(f"✅ Embedding model loaded")
+        # Initialize components
+        self.indexer = None
+        self.retriever = None
+        self.qa_system = None
+        self.evaluator = None
+        self.chatbot = None
         
-        # Initialize ChromaDB
-        self.vectorstore_dir.mkdir(parents=True, exist_ok=True)
-        self.chroma_client = chromadb.PersistentClient(path=str(self.vectorstore_dir))
-        self.collection_name = "rag_collection"
-        
-        # Initialize LLM (Groq)
-        self.llm = None
-        if groq_api_key:
-            try:
-                print(f"🔧 Initializing Groq LLM: {groq_model}")
-                self.llm = Groq(model=groq_model, api_key=groq_api_key)
-                print(f"✅ Groq LLM initialized successfully")
-            except Exception as e:
-                print(f"⚠️  Failed to initialize Groq LLM: {e}")
-                import traceback
-                print(f"⚠️  Error details: {traceback.format_exc()}")
-        else:
-            print("⚠️  No Groq API key provided. LLM queries will not work.")
-            print("⚠️  Without an LLM, queries will return raw document content instead of generated answers.")
-        
-        # Initialize index (will be built or loaded)
+        # Initialize index
         self.index = None
-        self.query_engine = None
+    
+    def initialize_components(self):
+        """Initialize all RAG system components."""
+        print("🔧 Initializing RAG system components...")
         
-    def build_index(self):
-        """
-        Build the vector index from documents in data_dir.
-        """
-        print("\n" + "="*80)
-        print("🚀 BUILDING INDEX WITH LLAMAINDEX")
-        print("="*80 + "\n")
-        
-        # Step 1: Load documents
-        print("📂 Step 1: Loading documents...")
-        if not self.data_dir.exists():
-            raise ValueError(f"Data directory not found: {self.data_dir}")
-        
-        documents = SimpleDirectoryReader(
-            input_dir=str(self.data_dir),
-            filename_as_id=True
-        ).load_data()
-        
-        if not documents:
-            raise ValueError(f"No documents found in {self.data_dir}")
-        
-        print(f"   ✅ Loaded {len(documents)} document(s)")
-        
-        # Step 2: Configure document metadata
-        print("\n📝 Step 2: Configuring document metadata...")
-        for doc in documents:
-            # Set text template for better embedding
-            doc.text_template = "Metadata:\n{metadata_str}\n---\nContent:\n{content}"
-            # Exclude page_label from embeddings (not useful for semantic search)
-            if "page_label" not in doc.excluded_embed_metadata_keys:
-                doc.excluded_embed_metadata_keys.append("page_label")
-        
-        print(f"   ✅ Configured {len(documents)} document(s)")
-        
-        # Step 3: Create text splitter
-        print(f"\n✂️  Step 3: Splitting documents (chunk_size={self.chunk_size}, overlap={self.chunk_overlap})...")
-        text_splitter = SentenceSplitter(
-            separator=" ",
+        # Q1: Initialize indexer
+        self.indexer = DocumentIndexer(
+            data_dir=self.data_dir,
+            vectorstore_dir=self.vectorstore_dir,
+            embedding_model=self.embedding_model,
             chunk_size=self.chunk_size,
             chunk_overlap=self.chunk_overlap
         )
         
-        # Step 4: Create or get ChromaDB collection
-        print(f"\n💾 Step 4: Setting up ChromaDB vector store...")
-        chroma_collection = self.chroma_client.get_or_create_collection(
-            name=self.collection_name
+        print("✅ All components initialized")
+    
+    def build_index(self):
+        """
+        Q1: Build the document index using the indexer component.
+        """
+        if not self.indexer:
+            self.initialize_components()
+        
+        # Build index using indexer
+        self.index = self.indexer.build_index()
+        
+        # Initialize other components that depend on the index
+        self._initialize_dependent_components()
+        
+        return self.index
+    
+    def _initialize_dependent_components(self):
+        """Initialize components that depend on the index."""
+        if not self.index:
+            return
+        
+        # Q2: Initialize retriever
+        self.retriever = DocumentRetriever(self.index)
+        
+        # Q3: Initialize QA system
+        self.qa_system = QASystem(
+            index=self.index,
+            groq_api_key=self.groq_api_key,
+            groq_model=self.groq_model
         )
-        vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
-        storage_context = StorageContext.from_defaults(vector_store=vector_store)
         
-        print(f"   ✅ ChromaDB collection '{self.collection_name}' ready")
+        # Q4: Initialize evaluator
+        self.evaluator = RAGEvaluator()
         
-        # Step 5: Create index with transformations
-        print(f"\n🔨 Step 5: Creating vector index...")
-        self.index = VectorStoreIndex.from_documents(
-            documents=documents,
-            storage_context=storage_context,
-            embed_model=self.embed_model,
-            transformations=[text_splitter],
-            show_progress=True
-        )
-        
-        print(f"   ✅ Index created successfully!")
-        
-        # Step 6: Create query engine
-        if self.llm:
-            print(f"\n🤖 Step 6: Creating query engine with LLM...")
-            # Create a proper prompt template that instructs the LLM to generate an answer
-            # This ensures the LLM synthesizes an answer rather than just returning context
-            qa_prompt_template = PromptTemplate(
-                "Context information is below.\n"
-                "---------------------\n"
-                "{context_str}\n"
-                "---------------------\n"
-                "Given the context information above and not prior knowledge, "
-                "answer the following question in a clear, structured, and comprehensive manner.\n"
-                "Provide a well-formatted answer based solely on the provided context.\n"
-                "If the context does not contain enough information to answer the question, "
-                "say so explicitly.\n\n"
-                "Question: {query_str}\n"
-                "Answer: "
-            )
-            try:
-                self.query_engine = self.index.as_query_engine(
-                    llm=self.llm,
-                    similarity_top_k=5,
-                    response_mode="compact",
-                    text_qa_template=qa_prompt_template
-                )
-                print(f"   ✅ Query engine ready with custom prompt template")
-            except TypeError as e:
-                # Fallback if text_qa_template parameter doesn't work
-                print(f"   ⚠️  Trying alternative prompt configuration: {e}")
-                try:
-                    # Try without explicit template (should use default)
-                    self.query_engine = self.index.as_query_engine(
-                        llm=self.llm,
-                        similarity_top_k=5,
-                        response_mode="compact"
-                    )
-                    print(f"   ✅ Query engine ready (using default prompt)")
-                except Exception as e2:
-                    print(f"   ❌ Failed to create query engine: {e2}")
-                    self.query_engine = None
-        else:
-            print(f"\n⚠️  Step 6: Skipping query engine (no LLM available)")
-        
-        print("\n" + "="*80)
-        print("✅ INDEX BUILD COMPLETE!")
-        print("="*80 + "\n")
+        # Q5: Initialize chatbot
+        if self.qa_system:
+            self.chatbot = RAGChatbot(self.qa_system)
         
     def load_index(self):
         """
         Load existing index from vectorstore.
         """
-        try:
-            print(f"📂 Loading existing index from {self.vectorstore_dir}...")
-            
-            # Get ChromaDB collection
-            chroma_collection = self.chroma_client.get_or_create_collection(
-                name=self.collection_name
-            )
-            vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
-            storage_context = StorageContext.from_defaults(vector_store=vector_store)
-            
-            # Load index
-            self.index = VectorStoreIndex.from_vector_store(
-                vector_store=vector_store,
-                embed_model=self.embed_model
-            )
-            
-            # Create query engine if LLM is available
-            if self.llm:
-                # Create a proper prompt template that instructs the LLM to generate an answer
-                qa_prompt_template = PromptTemplate(
-                    "Context information is below.\n"
-                    "---------------------\n"
-                    "{context_str}\n"
-                    "---------------------\n"
-                    "Given the context information above and not prior knowledge, "
-                    "answer the following question in a clear, structured, and comprehensive manner.\n"
-                    "Provide a well-formatted answer based solely on the provided context.\n"
-                    "If the context does not contain enough information to answer the question, "
-                    "say so explicitly.\n\n"
-                    "Question: {query_str}\n"
-                    "Answer: "
-                )
-                try:
-                    self.query_engine = self.index.as_query_engine(
-                        llm=self.llm,
-                        similarity_top_k=5,
-                        response_mode="compact",
-                        text_qa_template=qa_prompt_template
-                    )
-                except TypeError:
-                    # Fallback if text_qa_template parameter doesn't work
-                    self.query_engine = self.index.as_query_engine(
-                        llm=self.llm,
-                        similarity_top_k=5,
-                        response_mode="compact"
-                    )
-            
-            print(f"✅ Index loaded successfully")
+        if not self.indexer:
+            self.initialize_components()
+        
+        # Load index using indexer
+        self.index = self.indexer.load_existing_index()
+        
+        if self.index:
+            # Initialize dependent components
+            self._initialize_dependent_components()
             return True
-            
-        except Exception as e:
-            print(f"❌ Failed to load index: {e}")
-            return False
+        
+        return False
     
     def query(self, question: str, k: int = 5) -> Dict[str, Any]:
         """
@@ -313,7 +195,7 @@ class RAGSystem:
                 answer = str(response).strip()
             
             # Debug: Check if we got a proper answer
-            print(f"📝 LLM Response length: {len(answer)} characters")
+            print(f"LLM Response length: {len(answer)} characters")
             if len(answer) < 50:
                 print(f"⚠️  Warning: Response seems too short: {answer[:200]}")
             
